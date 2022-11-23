@@ -104,7 +104,6 @@ class AnnotationToTranscriptMatcher:
         Matches annotation items with transcript.
         '''
         result = []
-        date_lines = []
 
         for item in self.__annotation_items:
             made_up = False
@@ -117,16 +116,7 @@ class AnnotationToTranscriptMatcher:
             if not made_up:
                 result.append(item)
 
-        '''
-        In each annotation line that does not contain made up entities 
-        we inspect whether there are any date specifications
-        '''
-        for item in result:
-            found_dates = [list(datefinder.find_dates(date)) for date in item]
-            if len(found_dates) > 0:
-                date_lines.append(item)
-
-        return result, date_lines
+        return result
 
     def __match_found(self, matches):
         for mtch in matches:
@@ -146,7 +136,9 @@ class TranscriptToAnnotationMatcher:
         and the list of annotation items as parameters.
         '''
         self.__transcript = transcript
-        self.__annotation = "\n".join(annotation_items)
+        self.__annotation = annotation_items
+        self.__annotation_as_str = "\n".join(annotation_items)
+        self.__existing_dates = []
 
         self.__patterns = [
             'PERSON[0-9]{1,2}', 'Person[0-9]{1,2}', 'person[0-9]{1,2}',
@@ -163,41 +155,57 @@ class TranscriptToAnnotationMatcher:
             'EMAIL[0-9]{1,2}', 'Email[0-9]{1,2}', 'email[0-9]{1,2}'
         ]
 
+        self.__find_existing_date_specifications()
+
     def match(self):
         '''
         Matches transcript items with annotation.
         '''
         result = []
-        date_lines = []
 
         for line in self.__transcript:
             not_found = False
 
             if len(line.strip()) > 0:
-                found_dates = [list(datefinder.find_dates(date)) for date in line]
                 for pattern in self.__patterns:
-                    if self.__match_found(re.findall(pattern, line)):
+                    if self.__match_not_found(re.findall(pattern, line)):
                         not_found = True
                         break
 
                 if not_found:
                     result.append('-' + line[:-1])
+                else:
+                    found_dates = self.__missing_date_specification(line)
 
-                '''
-                For each transcript line we inspect, 
-                whether it contains any date relevant information.
-                '''
-                if len(found_dates) > 0:
-                    date_lines.append(line)
+                    if len(found_dates) > 0:
+                        result.append(line)
 
-        return result, date_lines
+        return result
 
-    def __match_found(self, matches):
+    def __find_existing_date_specifications(self):
+        '''
+        Iterates over annotation lines without made up entities 
+        and returns those that contain any date specifications.
+        '''
+        for item in self.__annotation:
+            found_dates = [match for match in datefinder.find_dates(item)]
+
+            if len(found_dates) > 0:
+                self.__existing_dates.extend(found_dates)
+
+    def __match_not_found(self, matches):
         for mtch in matches:
-            if mtch not in self.__annotation:
+            if mtch not in self.__annotation_as_str:
                 return True
 
         return False
+
+    def __missing_date_specification(self, line):
+        '''
+        We inspect a transcript whether it contains any date relevant information
+        that was missed in annotation.
+        '''
+        return [d for d in datefinder.find_dates(line) if d not in self.__existing_dates]
 
 
 def main():
@@ -212,31 +220,21 @@ def main():
             print(_output, file = outputfile)
 
 
-    with open('init.txt') as f:
+    with open('in.txt') as f:
         transcript = f.readlines()
 
-        antn_parser = AnnotationParser('res.txt')
+        antn_parser = AnnotationParser('out.txt')
         antn_parser.parse()
 
         att = AnnotationToTranscriptMatcher(transcript, antn_parser.all_items())
-        existing_items, annot_date_lines = att.match()
+        existing_items = att.match()
 
         tta = TranscriptToAnnotationMatcher(transcript, existing_items)
-        missing_items, tr_date_lines = tta.match()
-
-        '''
-        Adding missing date entities to annotation.
-        '''
-        missing_date_lines = []
-        for tr_line in tr_date_lines:
-            if tr_line in annot_date_lines:
-                continue
-            else:
-                missing_date_lines.append(tr_line)
+        missing_items = tta.match()
 
         output = antn_parser.date() + "\n"
         output += antn_parser.attendees_list() + "\n\n\nSUMMARY-\n"
-        output += "\n".join(existing_items + missing_items + missing_date_lines)
+        output += "\n".join(existing_items + missing_items)
         output +="\n\n\nMinuted by: Team ABC"
 
         store_output_as_file('new_annotation.txt', output)
